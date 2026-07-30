@@ -24,8 +24,34 @@ class BackgroundDownloadEvents {
   /// background → UI: download failed
   static const String failed = 'failed';
 
+  /// UI → background: "what is happening right now?"
+  ///
+  /// The progress stream is a broadcast controller with no replay, so a UI that
+  /// was recreated while the service kept running hears nothing until the next
+  /// update — and nothing at all if the download already finished. This gives a
+  /// newly built Cubit a starting point.
+  static const String queryState = 'queryDownloadState';
+
+  /// background → UI: one-shot answer to [queryState].
+  static const String stateSnapshot = 'downloadStateSnapshot';
+
   /// UI → background: stop the service
   static const String stopService = 'stopService';
+}
+
+/// Point-in-time answer to [BackgroundDownloadEvents.queryState].
+class DownloadStateSnapshot {
+  const DownloadStateSnapshot({
+    required this.isDownloading,
+    required this.progress,
+    this.savedPath,
+    this.errorMessage,
+  });
+
+  final bool isDownloading;
+  final int progress;
+  final String? savedPath;
+  final String? errorMessage;
 }
 
 /// Typed events the Cubit can listen to (cleaner than raw Maps).

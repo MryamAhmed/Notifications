@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:gap/gap.dart';
+import 'package:notifecation/core/background/download_trace.dart';
 import 'package:notifecation/core/constants/app_values.dart';
 import 'package:notifecation/core/constants/test_keys.dart';
 import 'package:notifecation/core/extensions/app_error_localization.dart';
@@ -26,6 +27,14 @@ class DownloadsHeader extends StatelessWidget {
           previous.permissionGranted != current.permissionGranted ||
           previous.isLoadingPreview != current.isLoadingPreview,
       builder: (context, state) {
+        // STEP 8: what the widget layer actually sees.
+        fgsTrace(
+          'UI',
+          'STEP 8 header rebuilt',
+          'isDownloading=${state.isDownloading} progress=${state.progress} '
+              'isLoadingPreview=${state.isLoadingPreview}',
+        );
+
         final cubit = context.read<DownloadsCubit>();
         final accent = _accentColor(state);
 

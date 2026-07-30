@@ -37,3 +37,15 @@ class ObserveForegroundDownloadUseCase {
 
   Stream<BackgroundDownloadEvent> call() => _backgroundDownloadService.events;
 }
+
+/// STEP (domain): Ask the FGS what it is doing, for a UI that was recreated
+/// while a download was already running. Null means "nothing to restore".
+@injectable
+class GetForegroundDownloadStateUseCase {
+  GetForegroundDownloadStateUseCase(this._backgroundDownloadService);
+
+  final BackgroundDownloadService _backgroundDownloadService;
+
+  Future<DownloadStateSnapshot?> call() =>
+      _backgroundDownloadService.currentState();
+}

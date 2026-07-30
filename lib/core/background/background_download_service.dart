@@ -5,6 +5,7 @@ import 'package:fpdart/fpdart.dart';
 import 'package:injectable/injectable.dart';
 import 'package:notifecation/core/background/background_download_events.dart';
 import 'package:notifecation/core/background/background_download_handler.dart';
+import 'package:notifecation/core/background/download_trace.dart';
 import 'package:notifecation/core/constants/app_error_codes.dart';
 import 'package:notifecation/core/error/app_error.dart';
 import 'package:notifecation/core/notifications/notification_service.dart';
@@ -123,6 +124,69 @@ class BackgroundDownloadService {
           message: error.toString(),
         ),
       );
+    }
+  }
+
+  /// STEP B2: One-shot snapshot of what the service is doing right now.
+  ///
+  /// Returns null when nothing is running, or when the isolate does not answer
+  /// in time — in both cases the UI simply keeps its default state.
+  Future<DownloadStateSnapshot?> currentState() async {
+    final service = FlutterBackgroundService();
+
+    // STEP 3: the query begins.
+    fgsTrace('UI', 'STEP 3 currentState() called');
+
+    // A false positive here only costs the timeout below, so the stale-value
+    // problem that made this check wrong in startDownload does not apply.
+    final running = await service.isRunning();
+    fgsTrace('UI', 'STEP 3a isRunning()', running);
+    if (!running) {
+      // A false here while the notification is still counting up means the
+      // query never even got a chance to be sent.
+      fgsTrace('UI', 'STEP 3b ABORT - service reported not running');
+      return null;
+    }
+
+    final completer = Completer<DownloadStateSnapshot?>();
+    late final StreamSubscription<Map<String, dynamic>?> subscription;
+
+    subscription =
+        service.on(BackgroundDownloadEvents.stateSnapshot).listen((event) {
+      // STEP 6: the reply came back across the pipe.
+      fgsTrace('UI', 'STEP 6 stateSnapshot received', event);
+      if (completer.isCompleted || event == null) return;
+      try {
+        completer.complete(
+          DownloadStateSnapshot(
+            isDownloading: event['isDownloading'] as bool? ?? false,
+            progress: (event['progress'] as num?)?.toInt() ?? 0,
+            savedPath: event['path'] as String?,
+            errorMessage: event['message'] as String?,
+          ),
+        );
+      } catch (error) {
+        // A cast failure here would otherwise be swallowed by the stream and
+        // look identical to "no reply arrived".
+        fgsTrace('UI', 'STEP 6a PARSE FAILED', error);
+        completer.complete(null);
+      }
+    });
+
+    fgsTrace('UI', 'STEP 3c sending queryState');
+    service.invoke(BackgroundDownloadEvents.queryState);
+
+    try {
+      final snapshot = await completer.future.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () {
+          fgsTrace('UI', 'STEP 3d TIMEOUT - no stateSnapshot within 2s');
+          return null;
+        },
+      );
+      return snapshot;
+    } finally {
+      await subscription.cancel();
     }
   }
 

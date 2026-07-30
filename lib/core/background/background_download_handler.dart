@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'background_download_events.dart';
+import 'download_trace.dart';
 import '../notifications/notification_service.dart';
 
 /// ============================================================================
@@ -92,6 +93,10 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
   // "Unable to establish connection on channel".
   DartPluginRegistrant.ensureInitialized();
 
+  // A second line here after the app reopens means a NEW isolate was spawned,
+  // i.e. the old one (and its in-memory progress) is gone.
+  fgsTrace('BG', 'isolate entry point started');
+
   // ---------------------------------------------------------------------------
   // STEP 2: Promote this Android service to a Foreground Service (FGS)
   // ---------------------------------------------------------------------------
@@ -138,7 +143,12 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
   });
   service.invoke(BackgroundDownloadEvents.ready);
 
+  // The UI isolate cannot read any of this directly, so it is mirrored back on
+  // request via BackgroundDownloadEvents.queryState.
   var downloadRunning = false;
+  var currentProgress = 0;
+  String? completedPath;
+  String? failureMessage;
 
   // ---------------------------------------------------------------------------
   // STEP 5: The download itself
@@ -153,6 +163,9 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
     // Prevent two downloads from sharing one service/notification at once.
     if (downloadRunning) return;
     downloadRunning = true;
+    currentProgress = 0;
+    completedPath = null;
+    failureMessage = null;
 
     try {
       // Persist BEFORE any network work, so a kill at any point is recoverable.
@@ -182,12 +195,20 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
         // Update only when the percentage actually increases.
         if (progress <= lastProgress) return;
         lastProgress = progress;
+        currentProgress = progress;
 
         // The UI isolate may be gone after the app is swiped away; invoking is
         // still safe, and a reopened UI can subscribe to future events.
         service.invoke(BackgroundDownloadEvents.progress, {
           'progress': progress,
         });
+
+        // Sampled so the log stays readable. Pair this with the UI's
+        // "progress event received" line: BG lines without matching UI lines
+        // mean the service-to-UI pipe itself is dead.
+        if (progress % 10 == 0) {
+          fgsTrace('BG', 'progress emitted', progress);
+        }
 
         // NotificationManagerService drops updates to an existing notification
         // once the package exceeds max_package_enqueue_rate (5/sec by default),
@@ -297,6 +318,7 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
 
       // The job is done, so a later respawn must not download it again.
       await _clearPendingJob();
+      completedPath = savePath;
       downloadRunning = false;
 
       // Stop FGS when work is done (saves battery + removes sticky notif lifecycle).
@@ -304,6 +326,7 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
     } catch (error) {
       // A real error (404, no network) is not something a respawn can fix.
       await _clearPendingJob();
+      failureMessage = error.toString();
       downloadRunning = false;
 
       service.invoke(BackgroundDownloadEvents.failed, {
@@ -351,7 +374,29 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
   });
 
   // ---------------------------------------------------------------------------
-  // STEP 11: Allow UI to stop the service manually
+  // STEP 11: Answer "what is happening right now?" from a recreated UI
+  // ---------------------------------------------------------------------------
+  // Registered here (before the resume in STEP 12) so it keeps answering while
+  // a resumed download is in flight.
+  service.on(BackgroundDownloadEvents.queryState).listen((event) {
+    // STEP 4: did the query actually cross the pipe into this isolate?
+    fgsTrace('BG', 'STEP 4 queryState received');
+
+    final snapshot = {
+      'isDownloading': downloadRunning,
+      'progress': currentProgress,
+      'path': completedPath,
+      'message': failureMessage,
+    };
+
+    service.invoke(BackgroundDownloadEvents.stateSnapshot, snapshot);
+
+    // STEP 5: what exactly was sent back.
+    fgsTrace('BG', 'STEP 5 stateSnapshot sent', snapshot);
+  });
+
+  // ---------------------------------------------------------------------------
+  // STEP 12: Allow UI to stop the service manually
   // ---------------------------------------------------------------------------
   service.on(BackgroundDownloadEvents.stopService).listen((event) async {
     await _clearPendingJob();
@@ -359,7 +404,7 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
   });
 
   // ---------------------------------------------------------------------------
-  // STEP 12: Resume a job that a process kill interrupted
+  // STEP 13: Resume a job that a process kill interrupted
   // ---------------------------------------------------------------------------
   // Reaching here with a job still on disk means the previous isolate died
   // before finishing — swiped away on an aggressive OEM, or low-memory killed —
