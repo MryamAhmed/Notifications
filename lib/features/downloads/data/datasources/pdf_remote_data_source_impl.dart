@@ -28,7 +28,7 @@ class PdfRemoteDataSourceImpl implements PdfRemoteDataSource {
       request: () async {
         final cacheDir = await getTemporaryDirectory();
         final savePath = p.join(cacheDir.path, fileName);
-        await _client.dio.download(AppEndpoints.samplePdf, savePath);
+        await _client.dio.download(AppEndpoints.previewPdf, savePath);
         return PdfFileResponse(path: savePath, fileName: fileName);
       },
     );
@@ -50,7 +50,7 @@ class PdfRemoteDataSourceImpl implements PdfRemoteDataSource {
 
         final savePath = p.join(downloadsDir.path, fileName);
         await _client.dio.download(
-          AppEndpoints.samplePdf,
+          AppEndpoints.downloadPdf,
           savePath,
           onReceiveProgress: (received, total) {
             if (total <= 0) return;

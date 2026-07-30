@@ -15,8 +15,7 @@ class RequestNotificationPermissionUseCase {
   final GeneralCubit _generalCubit;
 
   Future<Either<AppError, bool>> call() async {
-    final granted =
-        await _notificationService.requestNotificationPermission();
+    final granted = await _notificationService.requestNotificationPermission();
     _generalCubit.setNotificationPermissionGranted(granted);
     return Right(granted);
   }

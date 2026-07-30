@@ -16,13 +16,24 @@ class Flavor {
     }
   }
 
-  /// Sample PDF used by the downloads spike (full URL).
-  static String get samplePdfUrl {
+  /// Small PDF used only to render the preview quickly.
+  static String get previewPdfUrl {
     switch (appFlavor) {
       case AppFlavor.dev:
       case AppFlavor.staging:
       case AppFlavor.prod:
         return 'https://mozilla.github.io/pdf.js/web/compressed.tracemonkey-pldi-09.pdf';
+    }
+  }
+
+  /// Verified 25 MB PDF used for visible Foreground Service progress testing.
+  static String get downloadPdfUrl {
+    switch (appFlavor) {
+      case AppFlavor.dev:
+      case AppFlavor.staging:
+      case AppFlavor.prod:
+        return 'https://samplefile.com/samples/download/document/pdf/'
+            'pdf_sample_file_25MB.pdf/';
     }
   }
 

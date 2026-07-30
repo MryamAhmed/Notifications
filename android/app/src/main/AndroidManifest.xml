@@ -45,7 +45,8 @@
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="dataSync"
-            android:exported="true"
+            android:exported="false"
+            android:stopWithTask="false"
             tools:replace="android:exported" />
 
         <!-- Don't delete the meta-data below.

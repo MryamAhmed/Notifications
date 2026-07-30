@@ -12,7 +12,7 @@ class LoadPdfPreviewUseCase {
   final PdfRepository _repository;
 
   Future<Either<AppError, PdfFileEntity>> call({
-    String fileName = ApiParameterConstant.samplePdfFileName,
+    String fileName = ApiParameterConstant.previewPdfFileName,
   }) {
     return _repository.fetchPreviewPdf(fileName: fileName);
   }

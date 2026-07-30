@@ -9,6 +9,12 @@ class NotificationService {
 
   static const int downloadNotificationId = 1001;
 
+  /// Kept separate from [downloadNotificationId].
+  ///
+  /// Android removes the Foreground Service notification when the service
+  /// stops. A different id lets the final success/failure notification remain.
+  static const int foregroundServiceNotificationId = 1002;
+
   static const AndroidNotificationChannel downloadsChannel =
       AndroidNotificationChannel(
     'downloads',

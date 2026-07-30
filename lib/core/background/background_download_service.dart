@@ -51,10 +51,10 @@ class BackgroundDownloadService {
         initialNotificationTitle: 'Download Service',
         initialNotificationContent: 'Preparing download...',
 
-        // Must match NotificationService.downloadNotificationId so progress
-        // updates replace the same notification instead of creating another.
+        // Dedicated id for the native FGS notification. It intentionally
+        // differs from the final local-notification id (see NotificationService).
         foregroundServiceNotificationId:
-            NotificationService.downloadNotificationId,
+            NotificationService.foregroundServiceNotificationId,
 
         // Android 14+: declare why this FGS is allowed to run.
         // dataSync = network transfer / file sync style work (our PDF download).
@@ -77,17 +77,39 @@ class BackgroundDownloadService {
     try {
       final service = FlutterBackgroundService();
 
-      // 1) Start the native Foreground Service if it is not already running.
-      final alreadyRunning = await service.isRunning();
-      if (!alreadyRunning) {
-        await service.startService();
-
-        // Tiny delay so the background isolate can attach its `.on(...)` listeners
-        // before we invoke startDownload.
-        await Future<void>.delayed(const Duration(milliseconds: 700));
+      // 1) Start the native Foreground Service unconditionally.
+      //
+      // isRunning() walks ActivityManager.getRunningServices(), which tracks the
+      // Android Service lifecycle, not the Flutter engine lifecycle. Right after
+      // stopSelf() the service is still listed while onDestroy has already
+      // nulled its method channel, so gating on it meant skipping the start and
+      // then pinging a dead engine until the handshake timed out.
+      //
+      // Starting again is safe: onStartCommand -> runService() early-returns
+      // while the engine is alive, and it revives a half-destroyed service.
+      if (!await service.startService()) {
+        return left(
+          AppError.local(
+            AppErrorCodes.foregroundServiceFailed,
+            message: 'Android could not start the Foreground Service.',
+          ),
+        );
       }
 
-      // 2) Send command + payload to the background isolate.
+      // 2) Wait for a real ready acknowledgement.
+      //
+      // A fixed delay is a race: slower devices may need more time to create
+      // the Flutter engine and attach the background isolate listeners.
+      try {
+        await _waitUntilBackgroundIsolateIsReady(service);
+      } on TimeoutException {
+        // An engine that was tearing down during the first attempt is gone by
+        // now, so a second start creates a fresh one.
+        if (!await service.startService()) rethrow;
+        await _waitUntilBackgroundIsolateIsReady(service);
+      }
+
+      // 3) Only send the command after the isolate confirms it is listening.
       service.invoke(BackgroundDownloadEvents.startDownload, {
         'url': url,
         'fileName': fileName,
@@ -101,6 +123,41 @@ class BackgroundDownloadService {
           message: error.toString(),
         ),
       );
+    }
+  }
+
+  Future<void> _waitUntilBackgroundIsolateIsReady(
+    FlutterBackgroundService service,
+  ) async {
+    final completer = Completer<void>();
+
+    late final StreamSubscription<Map<String, dynamic>?> readySubscription;
+    Timer? pingTimer;
+
+    readySubscription =
+        service.on(BackgroundDownloadEvents.ready).listen((event) {
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
+    });
+
+    // Ping immediately and repeatedly. This also works when the service was
+    // already running and its one-time startup "ready" event was missed.
+    void ping() => service.invoke(BackgroundDownloadEvents.ping);
+    ping();
+    pingTimer =
+        Timer.periodic(const Duration(milliseconds: 250), (_) => ping());
+
+    try {
+      await completer.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw TimeoutException(
+          'Foreground Service isolate did not become ready.',
+        ),
+      );
+    } finally {
+      pingTimer.cancel();
+      await readySubscription.cancel();
     }
   }
 

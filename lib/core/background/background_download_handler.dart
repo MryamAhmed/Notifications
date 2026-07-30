@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 
@@ -9,6 +10,63 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'background_download_events.dart';
+import '../notifications/notification_service.dart';
+
+/// ============================================================================
+/// PENDING JOB PERSISTENCE
+/// ============================================================================
+/// The `startDownload` command only ever exists in the UI isolate's memory.
+/// When an OEM kills the process on swipe, the plugin's WatchdogReceiver
+/// respawns the service with a brand new isolate that has nothing to do — it
+/// posts "Preparing download..." and waits forever for a command whose only
+/// sender just died.
+///
+/// Writing the job to disk lets the respawned isolate pick it back up. A file
+/// is used instead of SharedPreferences so no new dependency is needed.
+
+/// Guard against an endlessly failing URL respawning the service forever.
+const int _maxResumeAttempts = 3;
+
+String _formatBytes(int bytes) {
+  const mb = 1024 * 1024;
+  if (bytes >= mb) return '${(bytes / mb).toStringAsFixed(1)} MB';
+  return '${(bytes / 1024).toStringAsFixed(0)} KB';
+}
+
+Future<File> _pendingJobFile() async {
+  final docsDir = await getApplicationDocumentsDirectory();
+  return File(p.join(docsDir.path, 'pending_download.json'));
+}
+
+Future<void> _savePendingJob({
+  required String url,
+  required String fileName,
+  required int attempt,
+}) async {
+  final file = await _pendingJobFile();
+  await file.writeAsString(
+    jsonEncode({'url': url, 'fileName': fileName, 'attempt': attempt}),
+  );
+}
+
+Future<Map<String, dynamic>?> _readPendingJob() async {
+  try {
+    final file = await _pendingJobFile();
+    if (!await file.exists()) return null;
+    final decoded = jsonDecode(await file.readAsString());
+    return decoded is Map<String, dynamic> ? decoded : null;
+  } catch (_) {
+    // A corrupt file must never block a new download.
+    return null;
+  }
+}
+
+Future<void> _clearPendingJob() async {
+  try {
+    final file = await _pendingJobFile();
+    if (await file.exists()) await file.delete();
+  } catch (_) {}
+}
 
 /// ============================================================================
 /// BACKGROUND ISOLATE ENTRY POINT (Foreground Service worker)
@@ -55,20 +113,15 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
   // ---------------------------------------------------------------------------
   // STEP 3: Create a local notifications plugin in THIS isolate
   // ---------------------------------------------------------------------------
-  // We reuse the same channel id + notification id as the UI NotificationService.
-  // Updating the SAME id gives us a live progress bar on one notification.
+  // We reuse the Downloads channel, but the running FGS and final result use
+  // different notification ids so stopping the FGS cannot remove the result.
   final notifications = FlutterLocalNotificationsPlugin();
   const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
   await notifications.initialize(
     const InitializationSettings(android: androidSettings),
   );
 
-  const channel = AndroidNotificationChannel(
-    'downloads',
-    'Downloads',
-    description: 'Shows download status and progress notifications.',
-    importance: Importance.high,
-  );
+  const channel = NotificationService.downloadsChannel;
 
   await notifications
       .resolvePlatformSpecificImplementation<
@@ -76,25 +129,37 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
       ?.createNotificationChannel(channel);
 
   // ---------------------------------------------------------------------------
-  // STEP 4: Listen for "startDownload" commands from the UI isolate
+  // STEP 4: Ready handshake
   // ---------------------------------------------------------------------------
-  // UI calls: FlutterBackgroundService().invoke('startDownload', {...})
-  // This isolate receives that event here.
-  service.on(BackgroundDownloadEvents.startDownload).listen((event) async {
-    if (event == null) return;
+  // The UI pings until this isolate answers. This replaces the unreliable
+  // "wait 700 ms and hope the listener exists" approach.
+  service.on(BackgroundDownloadEvents.ping).listen((event) {
+    service.invoke(BackgroundDownloadEvents.ready);
+  });
+  service.invoke(BackgroundDownloadEvents.ready);
 
-    final url = event['url'] as String?;
-    final fileName = event['fileName'] as String?;
-    if (url == null || fileName == null) {
-      service.invoke(BackgroundDownloadEvents.failed, {
-        'message': 'Missing url or fileName in startDownload event',
-      });
-      return;
-    }
+  var downloadRunning = false;
+
+  // ---------------------------------------------------------------------------
+  // STEP 5: The download itself
+  // ---------------------------------------------------------------------------
+  // Extracted into a function because two callers need it: a fresh command
+  // from the UI, and a resume after the process was killed mid-download.
+  Future<void> runDownload({
+    required String url,
+    required String fileName,
+    required int attempt,
+  }) async {
+    // Prevent two downloads from sharing one service/notification at once.
+    if (downloadRunning) return;
+    downloadRunning = true;
 
     try {
+      // Persist BEFORE any network work, so a kill at any point is recoverable.
+      await _savePendingJob(url: url, fileName: fileName, attempt: attempt);
+
       // -----------------------------------------------------------------
-      // STEP 5: Resolve a writable save path inside app documents
+      // STEP 6: Resolve a writable save path inside app documents
       // -----------------------------------------------------------------
       // App-specific storage does NOT need legacy WRITE_EXTERNAL_STORAGE.
       final docsDir = await getApplicationDocumentsDirectory();
@@ -105,39 +170,81 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
       final savePath = p.join(downloadsDir.path, fileName);
 
       // -----------------------------------------------------------------
-      // STEP 6: Show/update the FGS notification with a real progress bar
+      // STEP 7: Update progress in a controlled order
       // -----------------------------------------------------------------
-      Future<void> showProgress(int progress) async {
-        await notifications.show(
-          1001,
-          'Downloading PDF',
-          '$progress% complete',
-          NotificationDetails(
-            android: AndroidNotificationDetails(
-              channel.id,
-              channel.name,
-              channelDescription: channel.description,
-              importance: Importance.high,
-              priority: Priority.high,
-              onlyAlertOnce: true,
-              showProgress: true,
-              maxProgress: 100,
-              progress: progress,
-              ongoing: progress < 100,
-            ),
-          ),
-        );
+      // Dio's progress callback is synchronous; async calls made directly in it
+      // can overlap and make 42% appear after 43%. This queue serializes updates.
+      var lastProgress = -1;
+      var lastNotifiedAt = DateTime.fromMillisecondsSinceEpoch(0);
+      Future<void> notificationQueue = Future<void>.value();
 
-        // Also notify the UI isolate so the Cubit can update the progress bar.
+      void reportProgress(int progress, {int received = 0, int total = 0}) {
+        // Update only when the percentage actually increases.
+        if (progress <= lastProgress) return;
+        lastProgress = progress;
+
+        // The UI isolate may be gone after the app is swiped away; invoking is
+        // still safe, and a reopened UI can subscribe to future events.
         service.invoke(BackgroundDownloadEvents.progress, {
           'progress': progress,
         });
+
+        // NotificationManagerService drops updates to an existing notification
+        // once the package exceeds max_package_enqueue_rate (5/sec by default),
+        // logging "Package enqueue rate is N. Shedding <key>". A 25 MB file
+        // produces 15-30 updates/sec, so nearly all of them were being thrown
+        // away and the bar looked frozen. Notifications with completed progress
+        // are exempt from shedding, so 100% must always be posted.
+        const minInterval = Duration(milliseconds: 500);
+        final now = DateTime.now();
+        if (progress < 100 && now.difference(lastNotifiedAt) < minInterval) {
+          return;
+        }
+        lastNotifiedAt = now;
+
+        // Update the SAME notification id used by startForeground().
+        //
+        // These are the exact Android progress-bar properties requested by
+        // the spike:
+        // - showProgress: true  → render the bar
+        // - maxProgress: 100    → percentage scale
+        // - progress            → current percentage
+        notificationQueue = notificationQueue.then((_) async {
+          await notifications.show(
+            NotificationService.foregroundServiceNotificationId,
+            'Downloading $fileName',
+            total > 0
+                ? '${_formatBytes(received)} of ${_formatBytes(total)}'
+                : 'Starting download...',
+            NotificationDetails(
+              android: AndroidNotificationDetails(
+                channel.id,
+                channel.name,
+                channelDescription: channel.description,
+                importance: Importance.high,
+                priority: Priority.high,
+                onlyAlertOnce: true,
+                showProgress: true,
+                maxProgress: 100,
+                progress: progress,
+                ongoing: true,
+                autoCancel: false,
+                // Android draws the bar but never a percentage, and several OEM
+                // skins (One UI, MIUI) drop the content-text line when a bar is
+                // present. subText renders in the header row next to the app
+                // name, which survives on every skin.
+                subText: '$progress%',
+              ),
+            ),
+          );
+        });
       }
 
-      await showProgress(0);
+      reportProgress(0);
+      await notificationQueue;
 
       // -----------------------------------------------------------------
-      // STEP 7: Perform the actual HTTP download with Dio in this isolate
+      // STEP 8: Perform the actual HTTP download with Dio in this isolate
       // -----------------------------------------------------------------
       final dio = Dio(
         BaseOptions(
@@ -149,20 +256,27 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
       await dio.download(
         url,
         savePath,
-        onReceiveProgress: (received, total) async {
+        onReceiveProgress: (received, total) {
           if (total <= 0) return;
           final progress = ((received / total) * 100).round().clamp(0, 100);
-          await showProgress(progress);
+          reportProgress(progress, received: received, total: total);
         },
       );
 
+      reportProgress(100);
+      await notificationQueue;
+
+      final savedBytes = await File(savePath).length();
+
       // -----------------------------------------------------------------
-      // STEP 8: Mark complete, tell UI, then stop the service
+      // STEP 9: Mark complete, tell UI, then stop the service
       // -----------------------------------------------------------------
+      // This uses notification id 1001. The FGS uses id 1002, so stopSelf()
+      // removes only the sticky FGS notification and leaves this result visible.
       await notifications.show(
-        1001,
+        NotificationService.downloadNotificationId,
         'Download complete',
-        'Saved to $savePath',
+        fileName,
         NotificationDetails(
           android: AndroidNotificationDetails(
             channel.id,
@@ -172,6 +286,7 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
             priority: Priority.high,
             onlyAlertOnce: true,
             ongoing: false,
+            subText: _formatBytes(savedBytes),
           ),
         ),
       );
@@ -180,15 +295,23 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
         'path': savePath,
       });
 
+      // The job is done, so a later respawn must not download it again.
+      await _clearPendingJob();
+      downloadRunning = false;
+
       // Stop FGS when work is done (saves battery + removes sticky notif lifecycle).
       await service.stopSelf();
     } catch (error) {
+      // A real error (404, no network) is not something a respawn can fix.
+      await _clearPendingJob();
+      downloadRunning = false;
+
       service.invoke(BackgroundDownloadEvents.failed, {
         'message': error.toString(),
       });
 
       await notifications.show(
-        1001,
+        NotificationService.downloadNotificationId,
         'Download failed',
         error.toString(),
         NotificationDetails(
@@ -205,12 +328,54 @@ Future<void> backgroundDownloadOnStart(ServiceInstance service) async {
 
       await service.stopSelf();
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // STEP 10: Listen for "startDownload" commands from the UI isolate
+  // ---------------------------------------------------------------------------
+  // UI calls: FlutterBackgroundService().invoke('startDownload', {...})
+  // This isolate receives that event here.
+  service.on(BackgroundDownloadEvents.startDownload).listen((event) async {
+    if (event == null) return;
+
+    final url = event['url'] as String?;
+    final fileName = event['fileName'] as String?;
+    if (url == null || fileName == null) {
+      service.invoke(BackgroundDownloadEvents.failed, {
+        'message': 'Missing url or fileName in startDownload event',
+      });
+      return;
+    }
+
+    await runDownload(url: url, fileName: fileName, attempt: 1);
   });
 
   // ---------------------------------------------------------------------------
-  // STEP 9: Allow UI to stop the service manually
+  // STEP 11: Allow UI to stop the service manually
   // ---------------------------------------------------------------------------
   service.on(BackgroundDownloadEvents.stopService).listen((event) async {
+    await _clearPendingJob();
     await service.stopSelf();
   });
+
+  // ---------------------------------------------------------------------------
+  // STEP 12: Resume a job that a process kill interrupted
+  // ---------------------------------------------------------------------------
+  // Reaching here with a job still on disk means the previous isolate died
+  // before finishing — swiped away on an aggressive OEM, or low-memory killed —
+  // and WatchdogReceiver respawned the service. Without this the respawned
+  // service would sit on "Preparing download..." forever.
+  final pendingJob = await _readPendingJob();
+  if (pendingJob != null) {
+    final url = pendingJob['url'] as String?;
+    final fileName = pendingJob['fileName'] as String?;
+    final attempt = (pendingJob['attempt'] as num?)?.toInt() ?? 1;
+
+    if (url == null || fileName == null || attempt >= _maxResumeAttempts) {
+      await _clearPendingJob();
+    } else {
+      // The server sends no Accept-Ranges, so this restarts from byte 0.
+      await runDownload(url: url, fileName: fileName, attempt: attempt + 1);
+    }
+  }
 }

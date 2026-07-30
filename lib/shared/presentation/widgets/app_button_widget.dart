@@ -33,7 +33,8 @@ class AppButtonWidget extends StatelessWidget {
       return SizedBox(
         height: 48.h,
         child: icon == null
-            ? OutlinedButton(onPressed: enabled ? onPressed : null, child: label)
+            ? OutlinedButton(
+                onPressed: enabled ? onPressed : null, child: label)
             : OutlinedButton.icon(
                 onPressed: enabled ? onPressed : null,
                 icon: Icon(icon, size: 20.r),

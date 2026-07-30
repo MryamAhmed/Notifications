@@ -6,6 +6,12 @@
 class BackgroundDownloadEvents {
   BackgroundDownloadEvents._();
 
+  /// UI → background: asks whether the isolate has attached its listeners.
+  static const String ping = 'downloadPing';
+
+  /// background → UI: confirms that commands can now be received.
+  static const String ready = 'downloadReady';
+
   /// UI → background: "please start downloading this file"
   static const String startDownload = 'startDownload';
 

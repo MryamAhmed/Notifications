@@ -18,11 +18,11 @@ class DownloadPdfUseCase {
   final BackgroundDownloadService _backgroundDownloadService;
 
   Future<Either<AppError, Unit>> call({
-    String fileName = ApiParameterConstant.samplePdfFileName,
+    String fileName = ApiParameterConstant.downloadPdfFileName,
   }) {
     // Hand off to the UI-isolate wrapper, which starts FGS + invoke(startDownload).
     return _backgroundDownloadService.startDownload(
-      url: AppEndpoints.samplePdf,
+      url: AppEndpoints.downloadPdf,
       fileName: fileName,
     );
   }
