@@ -92,7 +92,26 @@ class NotificationService {
       downloadNotificationId,
       title,
       '$safeProgress% complete',
-      _notificationDetails(progress: safeProgress),
+      _notificationDetails(
+        progress: safeProgress,
+        ongoing: safeProgress < 100,
+      ),
+    );
+  }
+
+  /// Shows a final success/failure notification for the download.
+  Future<void> showDownloadFinishedNotification({
+    required bool success,
+    String? body,
+  }) async {
+    await _plugin.show(
+      downloadNotificationId,
+      success ? 'Download complete' : 'Download failed',
+      body ??
+          (success
+              ? 'Your PDF was saved successfully.'
+              : 'Something went wrong while downloading.'),
+      _notificationDetails(ongoing: false),
     );
   }
 
@@ -101,7 +120,10 @@ class NotificationService {
     await _plugin.cancel(downloadNotificationId);
   }
 
-  NotificationDetails _notificationDetails({int? progress}) {
+  NotificationDetails _notificationDetails({
+    int? progress,
+    bool ongoing = false,
+  }) {
     final androidDetails = AndroidNotificationDetails(
       downloadsChannel.id,
       downloadsChannel.name,
@@ -112,6 +134,7 @@ class NotificationService {
       showProgress: progress != null,
       maxProgress: 100,
       progress: progress ?? 0,
+      ongoing: ongoing,
     );
 
     return NotificationDetails(android: androidDetails);
