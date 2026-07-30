@@ -3,8 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:injectable/injectable.dart';
-import 'package:notifecation/core/background/background_download_events.dart';
-import 'package:notifecation/core/background/download_trace.dart';
+import 'package:notifecation/core/background/download_progress_store.dart';
 import 'package:notifecation/core/constants/app_error_codes.dart';
 import 'package:notifecation/core/error/app_error.dart';
 import 'package:notifecation/features/downloads/domain/usecases/download_pdf_usecase.dart';
@@ -12,148 +11,107 @@ import 'package:notifecation/features/downloads/domain/usecases/load_pdf_preview
 import 'package:notifecation/features/downloads/domain/usecases/request_notification_permission_usecase.dart';
 import 'package:notifecation/features/downloads/presentation/downloads_screen/cubit/downloads_state.dart';
 
-/// UI-side controller for Phase 1 + Foreground Service download.
+/// UI-side controller for the WorkManager download branch.
 ///
-/// Important:
-/// - Preview still loads in the UI isolate (fast, for displaying PDF).
-/// - The actual "Download" button starts an Android Foreground Service.
-/// - Progress comes back through ObserveForegroundDownloadUseCase events.
+/// Difference from the Foreground Service branch worth noting: restoring an
+/// in-flight download needs no request/response handshake with a service. The
+/// worker's progress lives in a file, so a freshly created Cubit simply reads
+/// it. What was a multi-step debugging problem there is one `await` here.
 @injectable
 class DownloadsCubit extends Cubit<DownloadsState> {
   DownloadsCubit(
     this._requestPermissionUseCase,
     this._loadPdfPreviewUseCase,
     this._downloadPdfUseCase,
-    this._observeForegroundDownloadUseCase,
-    this._getForegroundDownloadStateUseCase,
+    this._observeDownloadProgressUseCase,
+    this._getDownloadProgressUseCase,
   ) : super(const DownloadsState()) {
-    // STEP 1: a new Cubit exists, so whatever state the old one held is gone.
-    fgsTrace('UI', 'STEP 1 DownloadsCubit created');
-
-    // Listening must start here, not in downloadPdf(). This Cubit is a factory,
-    // so after the process is killed and the app reopened a brand new instance
-    // is built while the service is still downloading — if it only subscribed
-    // on button press it would never hear that download at all.
-    _listenToService();
-    syncWithRunningService();
-
-    // STEP: ask permission + load preview as soon as screen Cubit is created.
+    _restoreLastKnownProgress();
+    _listenToWorker();
     bootstrap();
   }
 
   final RequestNotificationPermissionUseCase _requestPermissionUseCase;
   final LoadPdfPreviewUseCase _loadPdfPreviewUseCase;
   final DownloadPdfUseCase _downloadPdfUseCase;
-  final ObserveForegroundDownloadUseCase _observeForegroundDownloadUseCase;
-  final GetForegroundDownloadStateUseCase _getForegroundDownloadStateUseCase;
+  final ObserveDownloadProgressUseCase _observeDownloadProgressUseCase;
+  final GetDownloadProgressUseCase _getDownloadProgressUseCase;
 
-  StreamSubscription<BackgroundDownloadEvent>? _downloadEventsSub;
+  StreamSubscription<DownloadProgressSnapshot>? _progressSub;
 
-  // Held as fields because the subscription now outlives a single downloadPdf()
-  // call, so the callbacks can no longer be captured in its closure.
+  // Held as fields because the subscription outlives a single downloadPdf()
+  // call and cannot capture them in a closure.
   VoidCallback? _onSuccess;
   void Function(AppError error)? _onError;
 
-  void _listenToService() {
-    fgsTrace('UI', 'STEP 1a subscribing to service events');
-    _downloadEventsSub = _observeForegroundDownloadUseCase().listen((event) {
-      if (isClosed) return;
+  /// Adopts whatever the worker was doing before this Cubit existed.
+  Future<void> _restoreLastKnownProgress() async {
+    final snapshot = await _getDownloadProgressUseCase();
+    if (isClosed || snapshot.status == DownloadTaskStatus.idle) return;
+    _applySnapshot(snapshot, notifyCallbacks: false);
+  }
 
-      switch (event) {
-        case DownloadProgressEvent(:final progress):
-          // If these never appear while the notification is counting up, the
-          // service-to-UI pipe is dead and the snapshot query cannot work
-          // either — the bug would be in the plugin wiring, not the snapshot.
-          if (progress % 10 == 0) {
-            fgsTrace('UI', 'progress event received', progress);
-          }
-          if (progress == state.progress && state.isDownloading) return;
-          emit(
-            state.copyWith(
-              isDownloading: true,
-              progress: progress,
-            ),
-          );
-        case DownloadCompletedEvent(:final path):
-          emit(
-            state.copyWith(
-              isDownloading: false,
-              progress: 100,
-              savedPath: path,
-              error: null,
-            ),
-          );
-          _onSuccess?.call();
-          _clearCallbacks();
-        case DownloadFailedEvent(:final message):
-          final error = AppError.local(
-            AppErrorCodes.pdfDownloadFailed,
-            message: message,
-          );
-          emit(
-            state.copyWith(
-              isDownloading: false,
-              error: error,
-            ),
-          );
-          _onError?.call(error);
-          _clearCallbacks();
-      }
+  void _listenToWorker() {
+    _progressSub = _observeDownloadProgressUseCase().listen((snapshot) {
+      if (isClosed) return;
+      _applySnapshot(snapshot, notifyCallbacks: true);
     });
   }
 
-  /// Adopts a download that is already running in the Foreground Service.
+  /// Translates a worker snapshot into UI state.
   ///
-  /// The progress stream has no replay, so subscribing alone leaves a gap: the
-  /// UI would show 0% until the next update, and would never recover at all if
-  /// the download had already finished. This asks the service directly.
-  Future<void> syncWithRunningService() async {
-    // STEP 2: the restore attempt starts.
-    fgsTrace('UI', 'STEP 2 syncWithRunningService() called');
+  /// [notifyCallbacks] is false when restoring on startup, so reopening the app
+  /// after a finished download does not replay a success or error toast.
+  void _applySnapshot(
+    DownloadProgressSnapshot snapshot, {
+    required bool notifyCallbacks,
+  }) {
+    switch (snapshot.status) {
+      case DownloadTaskStatus.idle:
+        return;
 
-    final snapshot = await _getForegroundDownloadStateUseCase();
+      // Accepted by WorkManager but not started. Progress stays at 0 for as
+      // long as Android decides to defer the work.
+      case DownloadTaskStatus.enqueued:
+      case DownloadTaskStatus.running:
+        emit(
+          state.copyWith(
+            isDownloading: true,
+            progress: snapshot.progress,
+            savedPath: null,
+            error: null,
+          ),
+        );
 
-    fgsTrace(
-      'UI',
-      'STEP 2a snapshot resolved',
-      snapshot == null
-          ? 'null (nothing to restore)'
-          : 'isDownloading=${snapshot.isDownloading} '
-              'progress=${snapshot.progress} savedPath=${snapshot.savedPath}',
-    );
+      case DownloadTaskStatus.success:
+        emit(
+          state.copyWith(
+            isDownloading: false,
+            progress: 100,
+            savedPath: snapshot.filePath,
+            error: null,
+          ),
+        );
+        if (notifyCallbacks) {
+          _onSuccess?.call();
+          _clearCallbacks();
+        }
 
-    if (isClosed) {
-      fgsTrace('UI', 'STEP 2b ABORT - cubit already closed');
-      return;
-    }
-    if (snapshot == null) return;
-
-    if (snapshot.isDownloading) {
-      emit(
-        state.copyWith(
-          isDownloading: true,
-          progress: snapshot.progress,
-          savedPath: null,
-          error: null,
-        ),
-      );
-      // STEP 7: the restored state is now in the Cubit.
-      fgsTrace(
-        'UI',
-        'STEP 7 emitted restored state',
-        'isDownloading=${state.isDownloading} progress=${state.progress}',
-      );
-    } else if (snapshot.savedPath != null) {
-      emit(
-        state.copyWith(
-          isDownloading: false,
-          progress: 100,
-          savedPath: snapshot.savedPath,
-        ),
-      );
-      fgsTrace('UI', 'STEP 7 emitted completed state', state.savedPath);
-    } else {
-      fgsTrace('UI', 'STEP 7 SKIPPED - snapshot says idle, nothing to restore');
+      case DownloadTaskStatus.failed:
+        final error = AppError.local(
+          AppErrorCodes.pdfDownloadFailed,
+          message: snapshot.errorMessage,
+        );
+        emit(
+          state.copyWith(
+            isDownloading: false,
+            error: error,
+          ),
+        );
+        if (notifyCallbacks) {
+          _onError?.call(error);
+          _clearCallbacks();
+        }
     }
   }
 
@@ -216,20 +174,17 @@ class DownloadsCubit extends Cubit<DownloadsState> {
     );
   }
 
-  /// Starts download inside an Android Foreground Service.
+  /// Queues the download with WorkManager.
   ///
-  /// Why FGS?
-  /// Android can kill normal background network work when the app is closed.
-  /// A Foreground Service shows a sticky notification and is allowed to keep
-  /// running long enough to finish the download + emit progress updates.
+  /// This returns as soon as Android records the request. Unlike the Foreground
+  /// Service branch, a successful return is no promise that bytes are moving:
+  /// the work may sit in the queue while the device is dozing or offline.
   Future<void> downloadPdf({
     VoidCallback? onSuccess,
     void Function(AppError error)? onError,
   }) async {
     if (state.isDownloading) return;
 
-    // The subscription is created in the constructor and lives for the whole
-    // Cubit, so only the one-shot UI callbacks are wired up here.
     _onSuccess = onSuccess;
     _onError = onError;
 
@@ -242,11 +197,10 @@ class DownloadsCubit extends Cubit<DownloadsState> {
       ),
     );
 
-    // Ask use case to start the Foreground Service + send startDownload.
-    final startResult = await _downloadPdfUseCase();
+    final enqueueResult = await _downloadPdfUseCase();
     if (isClosed) return;
 
-    startResult.match(
+    enqueueResult.match(
       (error) {
         emit(
           state.copyWith(
@@ -258,7 +212,7 @@ class DownloadsCubit extends Cubit<DownloadsState> {
         _clearCallbacks();
       },
       (_) {
-        // Service started. Progress will arrive through the event stream.
+        // Queued. Progress arrives through the polled snapshot stream.
       },
     );
   }
@@ -270,7 +224,7 @@ class DownloadsCubit extends Cubit<DownloadsState> {
 
   @override
   Future<void> close() async {
-    await _downloadEventsSub?.cancel();
+    await _progressSub?.cancel();
     return super.close();
   }
 }

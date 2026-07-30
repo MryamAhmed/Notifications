@@ -1,14 +1,14 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <!-- STEP: Foreground Service permissions (Android 9+ / 14+) -->
-    <!-- FOREGROUND_SERVICE = allow starting a foreground service at all -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <!-- DATA_SYNC = Android 14+ typed FGS permission for file/network sync work -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
-    <!-- WAKE_LOCK = helps keep CPU awake while the download isolate runs -->
-    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!--
+      No FOREGROUND_SERVICE / FOREGROUND_SERVICE_DATA_SYNC on this branch.
+      WorkManager schedules through JobScheduler, and the Flutter plugin cannot
+      call setForegroundAsync(), so no foreground service is ever started.
+
+      WAKE_LOCK and RECEIVE_BOOT_COMPLETED are contributed by androidx.work's
+      own manifest during merge, so they need not be declared here.
+    -->
 
     <application
         android:label="notifecation"
@@ -38,16 +38,10 @@
         </activity>
 
         <!--
-          STEP: Declare the flutter_background_service Android Service.
-          - foregroundServiceType="dataSync" tells Android 14+ this FGS does network/file sync.
-          - Without this declaration + matching permission, startForeground() is rejected.
+          No <service> declaration is needed. WorkManager registers its own
+          SystemJobService and the plugin's BackgroundWorker through the
+          androidx.work manifest, which the build merges in automatically.
         -->
-        <service
-            android:name="id.flutter.flutter_background_service.BackgroundService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false"
-            android:stopWithTask="false"
-            tools:replace="android:exported" />
 
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

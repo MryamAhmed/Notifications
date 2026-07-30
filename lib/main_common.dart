@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_gen/gen_l10n/app_localizations.dart';
+import 'package:notifecation/l10n/app_localizations.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
-import 'package:notifecation/core/background/background_download_service.dart';
+import 'package:notifecation/core/background/download_task_scheduler.dart';
 import 'package:notifecation/core/background/download_trace.dart';
 import 'package:notifecation/core/di/di.dart';
 import 'package:notifecation/core/notifications/notification_service.dart';
@@ -24,10 +24,12 @@ Future<void> mainCommon() async {
   // STEP 2: Init local notifications in the UI isolate (channels + plugin).
   await getIt<NotificationService>().initialize();
 
-  // STEP 3: Configure flutter_background_service (does NOT start it yet).
-  // This registers the background isolate entry point used for FGS downloads.
-  await getIt<BackgroundDownloadService>().initialize();
-  fgsTrace('UI', 'STEP 0a configure() done - event channel attached');
+  // STEP 3: Register the WorkManager Dart entry point.
+  //
+  // This only persists a callback handle so Android can find callbackDispatcher
+  // later. Nothing is scheduled and no background isolate is spawned here.
+  await getIt<DownloadTaskScheduler>().initialize();
+  fgsTrace('UI', 'STEP 0a WorkManager callback handle registered');
 
   runApp(const NotificationSpikeApp());
 }

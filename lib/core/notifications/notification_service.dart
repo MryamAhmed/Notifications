@@ -7,13 +7,12 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
 
-  static const int downloadNotificationId = 1001;
-
-  /// Kept separate from [downloadNotificationId].
+  /// A single id for the whole download, so every `show` call replaces the
+  /// previous notification instead of stacking a new one.
   ///
-  /// Android removes the Foreground Service notification when the service
-  /// stops. A different id lets the final success/failure notification remain.
-  static const int foregroundServiceNotificationId = 1002;
+  /// Unlike the Foreground Service branch, no second id is needed: WorkManager
+  /// never owns a service notification that Android would tear down on stop.
+  static const int downloadNotificationId = 1001;
 
   static const AndroidNotificationChannel downloadsChannel =
       AndroidNotificationChannel(
@@ -66,12 +65,13 @@ class NotificationService {
   Future<void> updateDownloadNotification({
     required int progress,
     String title = 'Downloading file',
+    String? body,
   }) async {
     final safeProgress = progress.clamp(0, 100);
     await _plugin.show(
       downloadNotificationId,
       title,
-      '$safeProgress% complete',
+      body ?? '$safeProgress% complete',
       _notificationDetails(
         progress: safeProgress,
         ongoing: safeProgress < 100,
@@ -113,6 +113,10 @@ class NotificationService {
       maxProgress: 100,
       progress: progress ?? 0,
       ongoing: ongoing,
+      // Android renders the bar but never a percentage, and One UI / MIUI drop
+      // the content-text line whenever a bar is present. subText sits in the
+      // header row beside the app name and survives on every OEM skin.
+      subText: progress != null ? '$progress%' : null,
     );
 
     return NotificationDetails(android: androidDetails);

@@ -1,51 +1,53 @@
 import 'package:fpdart/fpdart.dart';
 import 'package:injectable/injectable.dart';
-import 'package:notifecation/core/background/background_download_events.dart';
-import 'package:notifecation/core/background/background_download_service.dart';
+import 'package:notifecation/core/background/download_progress_store.dart';
+import 'package:notifecation/core/background/download_task_scheduler.dart';
 import 'package:notifecation/core/constants/api_parameter_constant.dart';
 import 'package:notifecation/core/constants/app_endpoints.dart';
 import 'package:notifecation/core/error/app_error.dart';
 
-/// STEP (domain): Start a PDF download inside the Android Foreground Service.
+/// STEP (domain): Hand a PDF download to Android's WorkManager.
 ///
-/// Why a use case?
-/// PR guidelines say Cubits inject use cases only — not repositories/services
-/// directly for feature actions. This use case is the Cubit's entry point.
+/// The signature is deliberately unchanged from the Foreground Service branch
+/// so the Cubit's call site stays the same. Only the meaning of a successful
+/// result changed: it now confirms the work was *queued*, not that it started.
 @injectable
 class DownloadPdfUseCase {
-  DownloadPdfUseCase(this._backgroundDownloadService);
+  DownloadPdfUseCase(this._scheduler);
 
-  final BackgroundDownloadService _backgroundDownloadService;
+  final DownloadTaskScheduler _scheduler;
 
   Future<Either<AppError, Unit>> call({
     String fileName = ApiParameterConstant.downloadPdfFileName,
   }) {
-    // Hand off to the UI-isolate wrapper, which starts FGS + invoke(startDownload).
-    return _backgroundDownloadService.startDownload(
+    return _scheduler.enqueueDownload(
       url: AppEndpoints.downloadPdf,
       fileName: fileName,
     );
   }
 }
 
-/// STEP (domain): Observe progress/complete/failed events from the FGS isolate.
+/// STEP (domain): Observe progress written to disk by the worker isolate.
+///
+/// The Foreground Service version streamed real push events over a plugin
+/// pipe. WorkManager exposes no such channel to Dart, so this stream is a
+/// polling loop over a shared file.
 @injectable
-class ObserveForegroundDownloadUseCase {
-  ObserveForegroundDownloadUseCase(this._backgroundDownloadService);
+class ObserveDownloadProgressUseCase {
+  ObserveDownloadProgressUseCase(this._scheduler);
 
-  final BackgroundDownloadService _backgroundDownloadService;
+  final DownloadTaskScheduler _scheduler;
 
-  Stream<BackgroundDownloadEvent> call() => _backgroundDownloadService.events;
+  Stream<DownloadProgressSnapshot> call() => _scheduler.watchProgress();
 }
 
-/// STEP (domain): Ask the FGS what it is doing, for a UI that was recreated
-/// while a download was already running. Null means "nothing to restore".
+/// STEP (domain): Read the last known progress once, to restore a UI that was
+/// recreated while work was still queued or running.
 @injectable
-class GetForegroundDownloadStateUseCase {
-  GetForegroundDownloadStateUseCase(this._backgroundDownloadService);
+class GetDownloadProgressUseCase {
+  GetDownloadProgressUseCase(this._scheduler);
 
-  final BackgroundDownloadService _backgroundDownloadService;
+  final DownloadTaskScheduler _scheduler;
 
-  Future<DownloadStateSnapshot?> call() =>
-      _backgroundDownloadService.currentState();
+  Future<DownloadProgressSnapshot> call() => _scheduler.currentProgress();
 }

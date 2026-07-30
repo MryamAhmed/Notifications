@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_gen/gen_l10n/app_localizations.dart';
+import 'package:notifecation/l10n/app_localizations.dart';
 import 'package:notifecation/core/constants/app_error_codes.dart';
 import 'package:notifecation/core/error/app_error.dart';
 

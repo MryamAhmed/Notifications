@@ -46,7 +46,7 @@ class DownloadsHeader extends StatelessWidget {
             borderRadius: BorderRadius.circular(20.r),
             boxShadow: [
               BoxShadow(
-                color: AppColors.primaryColor.withOpacity(0.08),
+                color: AppColors.primaryColor.withValues(alpha: 0.08),
                 blurRadius: 16,
                 offset: const Offset(0, 6),
               ),
@@ -60,7 +60,7 @@ class DownloadsHeader extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.all(AppPadding.p12),
                     decoration: BoxDecoration(
-                      color: accent.withOpacity(0.12),
+                      color: accent.withValues(alpha: 0.12),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(_stateIcon(state), color: accent, size: 22.r),
@@ -79,8 +79,8 @@ class DownloadsHeader extends StatelessWidget {
               ),
               if (state.isDownloading) ...[
                 const Gap(AppSpacing.s16),
-                // The service throttles notification posts to 2/sec, so the
-                // events arrive in visible jumps. Animating between them keeps
+                // The UI polls the worker's snapshot file twice a second, so
+                // updates arrive in visible jumps. Animating between them keeps
                 // the bar and the percentage moving smoothly.
                 TweenAnimationBuilder<double>(
                   tween: Tween(begin: 0, end: state.progress / 100),
