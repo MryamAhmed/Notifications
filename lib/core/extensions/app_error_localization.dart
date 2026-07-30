@@ -17,6 +17,8 @@ extension AppErrorX on AppError {
         return l10n.previewFailed;
       case AppErrorCodes.pdfDownloadFailed:
         return l10n.downloadFailed;
+      case AppErrorCodes.foregroundServiceFailed:
+        return l10n.downloadFailed;
       default:
         return message?.isNotEmpty == true ? message! : l10n.unknownError;
     }

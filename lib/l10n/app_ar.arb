@@ -1,14 +1,14 @@
 {
   "@@locale": "ar",
   "appTitle": "تجربة الإشعارات",
-  "downloadsTitle": "المرحلة 1: تنزيل PDF",
+  "downloadsTitle": "المرحلة 4: تنزيل Foreground Service",
   "download": "تنزيل",
   "downloading": "جاري التنزيل...",
   "retryLoadPdf": "إعادة تحميل PDF",
   "loadingPdfPreview": "جاري تحميل معاينة PDF...",
   "permissionDeniedLoadingPreview": "تم رفض إذن الإشعارات. جاري تحميل المعاينة...",
-  "pdfReady": "ملف PDF جاهز. اضغط تنزيل لحفظه مع تتبع التقدم.",
-  "downloadingPdf": "جاري تنزيل PDF... {progress}%",
+  "pdfReady": "ملف PDF جاهز. اضغط تنزيل لتشغيله عبر Foreground Service مع تتبع التقدم.",
+  "downloadingPdf": "تنزيل Foreground... {progress}%",
   "@downloadingPdf": {
     "placeholders": {
       "progress": {

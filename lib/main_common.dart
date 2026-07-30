@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
+import 'package:notifecation/core/background/background_download_service.dart';
 import 'package:notifecation/core/di/di.dart';
 import 'package:notifecation/core/notifications/notification_service.dart';
 import 'package:notifecation/core/themes/app_colors.dart';
@@ -11,8 +12,17 @@ import 'package:notifecation/shared/presentation/cubit/general_cubit.dart';
 
 Future<void> mainCommon() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // STEP 1: Register GetIt dependencies (Cubits, use cases, Dio, etc.).
   await configureDependencies();
+
+  // STEP 2: Init local notifications in the UI isolate (channels + plugin).
   await getIt<NotificationService>().initialize();
+
+  // STEP 3: Configure flutter_background_service (does NOT start it yet).
+  // This registers the background isolate entry point used for FGS downloads.
+  await getIt<BackgroundDownloadService>().initialize();
+
   runApp(const NotificationSpikeApp());
 }
 

@@ -1,56 +1,39 @@
 import 'package:fpdart/fpdart.dart';
 import 'package:injectable/injectable.dart';
+import 'package:notifecation/core/background/background_download_events.dart';
+import 'package:notifecation/core/background/background_download_service.dart';
 import 'package:notifecation/core/constants/api_parameter_constant.dart';
+import 'package:notifecation/core/constants/app_endpoints.dart';
 import 'package:notifecation/core/error/app_error.dart';
-import 'package:notifecation/core/notifications/notification_service.dart';
-import 'package:notifecation/features/downloads/domain/entities/pdf_file_entity.dart';
-import 'package:notifecation/features/downloads/domain/repositories/pdf_repository.dart';
 
+/// STEP (domain): Start a PDF download inside the Android Foreground Service.
+///
+/// Why a use case?
+/// PR guidelines say Cubits inject use cases only — not repositories/services
+/// directly for feature actions. This use case is the Cubit's entry point.
 @injectable
 class DownloadPdfUseCase {
-  DownloadPdfUseCase(
-    this._repository,
-    this._notificationService,
-  );
+  DownloadPdfUseCase(this._backgroundDownloadService);
 
-  final PdfRepository _repository;
-  final NotificationService _notificationService;
+  final BackgroundDownloadService _backgroundDownloadService;
 
-  Future<Either<AppError, PdfFileEntity>> call({
+  Future<Either<AppError, Unit>> call({
     String fileName = ApiParameterConstant.samplePdfFileName,
-    required void Function(int progress) onProgress,
-  }) async {
-    await _notificationService.showDownloadNotification(
-      title: 'Downloading PDF',
-      body: 'Starting download...',
-    );
-
-    final result = await _repository.downloadPdf(
+  }) {
+    // Hand off to the UI-isolate wrapper, which starts FGS + invoke(startDownload).
+    return _backgroundDownloadService.startDownload(
+      url: AppEndpoints.samplePdf,
       fileName: fileName,
-      onProgress: (progress) {
-        onProgress(progress);
-        _notificationService.updateDownloadNotification(
-          progress: progress,
-          title: 'Downloading PDF',
-        );
-      },
     );
-
-    await result.match(
-      (error) async {
-        await _notificationService.showDownloadFinishedNotification(
-          success: false,
-          body: error.message,
-        );
-      },
-      (file) async {
-        await _notificationService.showDownloadFinishedNotification(
-          success: true,
-          body: 'Saved to ${file.path}',
-        );
-      },
-    );
-
-    return result;
   }
+}
+
+/// STEP (domain): Observe progress/complete/failed events from the FGS isolate.
+@injectable
+class ObserveForegroundDownloadUseCase {
+  ObserveForegroundDownloadUseCase(this._backgroundDownloadService);
+
+  final BackgroundDownloadService _backgroundDownloadService;
+
+  Stream<BackgroundDownloadEvent> call() => _backgroundDownloadService.events;
 }

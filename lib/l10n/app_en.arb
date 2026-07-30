@@ -1,14 +1,14 @@
 {
   "@@locale": "en",
   "appTitle": "Notification Spike",
-  "downloadsTitle": "Phase 1: PDF Download",
+  "downloadsTitle": "Phase 4: Foreground Download",
   "download": "Download",
   "downloading": "Downloading...",
   "retryLoadPdf": "Retry load PDF",
   "loadingPdfPreview": "Loading PDF preview...",
   "permissionDeniedLoadingPreview": "Notification permission denied. Loading PDF preview...",
-  "pdfReady": "PDF ready. Press Download to save it with live progress.",
-  "downloadingPdf": "Downloading PDF... {progress}%",
+  "pdfReady": "PDF ready. Press Download to run it in a Foreground Service with live progress.",
+  "downloadingPdf": "Foreground download... {progress}%",
   "@downloadingPdf": {
     "placeholders": {
       "progress": {

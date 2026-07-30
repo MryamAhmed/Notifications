@@ -6,4 +6,5 @@ class AppErrorCodes {
   static const String pdfPreviewFailed = 'PDF_PREVIEW_FAILED';
   static const String pdfDownloadFailed = 'PDF_DOWNLOAD_FAILED';
   static const String permissionDenied = 'PERMISSION_DENIED';
+  static const String foregroundServiceFailed = 'FOREGROUND_SERVICE_FAILED';
 }
