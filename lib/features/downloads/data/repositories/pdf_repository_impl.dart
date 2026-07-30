@@ -1,52 +1,33 @@
-import 'dart:io';
+import 'package:fpdart/fpdart.dart';
+import 'package:injectable/injectable.dart';
+import 'package:notifecation/core/error/app_error.dart';
+import 'package:notifecation/features/downloads/data/datasources/pdf_remote_data_source.dart';
+import 'package:notifecation/features/downloads/domain/entities/pdf_file_entity.dart';
+import 'package:notifecation/features/downloads/domain/repositories/pdf_repository.dart';
 
-import 'package:dio/dio.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-
-import '../../domain/repositories/pdf_repository.dart';
-
+@LazySingleton(as: PdfRepository)
 class PdfRepositoryImpl implements PdfRepository {
-  PdfRepositoryImpl({Dio? dio}) : _dio = dio ?? Dio();
+  PdfRepositoryImpl(this._remoteDataSource);
 
-  final Dio _dio;
+  final PdfRemoteDataSource _remoteDataSource;
 
   @override
-  Future<String> fetchPreviewPdf({
-    required String url,
+  Future<Either<AppError, PdfFileEntity>> fetchPreviewPdf({
     required String fileName,
   }) async {
-    final cacheDir = await getTemporaryDirectory();
-    final savePath = p.join(cacheDir.path, fileName);
-    await _dio.download(url, savePath);
-    return savePath;
+    final result = await _remoteDataSource.fetchPreviewPdf(fileName: fileName);
+    return result.map((response) => response.toDomain());
   }
 
   @override
-  Future<String> downloadPdf({
-    required String url,
+  Future<Either<AppError, PdfFileEntity>> downloadPdf({
     required String fileName,
     required void Function(int progress) onProgress,
   }) async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final downloadsDir = Directory(p.join(docsDir.path, 'downloads'));
-    if (!await downloadsDir.exists()) {
-      await downloadsDir.create(recursive: true);
-    }
-
-    final savePath = p.join(downloadsDir.path, fileName);
-
-    await _dio.download(
-      url,
-      savePath,
-      onReceiveProgress: (received, total) {
-        if (total <= 0) return;
-        final progress = ((received / total) * 100).round().clamp(0, 100);
-        onProgress(progress);
-      },
+    final result = await _remoteDataSource.downloadPdf(
+      fileName: fileName,
+      onProgress: onProgress,
     );
-
-    onProgress(100);
-    return savePath;
+    return result.map((response) => response.toDomain());
   }
 }

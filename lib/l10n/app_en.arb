@@ -1,0 +1,32 @@
+{
+  "@@locale": "en",
+  "appTitle": "Notification Spike",
+  "downloadsTitle": "Phase 1: PDF Download",
+  "download": "Download",
+  "downloading": "Downloading...",
+  "retryLoadPdf": "Retry load PDF",
+  "loadingPdfPreview": "Loading PDF preview...",
+  "permissionDeniedLoadingPreview": "Notification permission denied. Loading PDF preview...",
+  "pdfReady": "PDF ready. Press Download to save it with live progress.",
+  "downloadingPdf": "Downloading PDF... {progress}%",
+  "@downloadingPdf": {
+    "placeholders": {
+      "progress": {
+        "type": "int"
+      }
+    }
+  },
+  "downloadComplete": "Download complete.\nSaved to: {path}",
+  "@downloadComplete": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "downloadFailed": "Download failed",
+  "previewFailed": "Failed to load PDF preview",
+  "unknownError": "Something went wrong",
+  "networkError": "Network error. Check your connection.",
+  "ok": "OK"
+}

@@ -1,16 +1,13 @@
-/// Contract for loading and saving PDF files.
-///
-/// Lives in domain so the Cubit depends on an abstraction, not Dio.
+import 'package:fpdart/fpdart.dart';
+import 'package:notifecation/core/error/app_error.dart';
+import 'package:notifecation/features/downloads/domain/entities/pdf_file_entity.dart';
+
 abstract class PdfRepository {
-  /// Downloads the remote PDF into a local preview/cache file.
-  Future<String> fetchPreviewPdf({
-    required String url,
+  Future<Either<AppError, PdfFileEntity>> fetchPreviewPdf({
     required String fileName,
   });
 
-  /// Downloads the remote PDF into app documents and reports progress 0–100.
-  Future<String> downloadPdf({
-    required String url,
+  Future<Either<AppError, PdfFileEntity>> downloadPdf({
     required String fileName,
     required void Function(int progress) onProgress,
   });
