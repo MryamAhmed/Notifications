@@ -46,7 +46,7 @@ class DownloadsHeader extends StatelessWidget {
             borderRadius: BorderRadius.circular(20.r),
             boxShadow: [
               BoxShadow(
-                color: AppColors.primaryColor.withOpacity(0.08),
+                color: AppColors.primaryColor.withValues(alpha: 0.08),
                 blurRadius: 16,
                 offset: const Offset(0, 6),
               ),
@@ -60,7 +60,7 @@ class DownloadsHeader extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.all(AppPadding.p12),
                     decoration: BoxDecoration(
-                      color: accent.withOpacity(0.12),
+                      color: accent.withValues(alpha: 0.12),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(_stateIcon(state), color: accent, size: 22.r),
