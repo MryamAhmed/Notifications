@@ -9,7 +9,7 @@ android {
     namespace = "com.example.notifecation"
     // flutter_local_notifications requires compileSdk 35+.
     compileSdk = 35
-    ndkVersion = "26.1.10909125"
+    ndkVersion = "26.3.11579264"
 
     compileOptions {
         // Required by flutter_local_notifications (Java 8+ APIs on older devices).
