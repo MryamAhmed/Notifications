@@ -192,8 +192,10 @@ that the download started immediately.
 - Replace policy for duplicate requests
 - Exponential retry backoff starting at 30 seconds
 
-Transient failures return a retry result. HTTP 4xx responses are considered
-permanent and are not retried.
+The code requests a delayed retry for temporary failures. HTTP 4xx responses
+are considered permanent and are not retried. However, automatic retry was not
+observed during the final physical-device test, so it is not treated as verified
+behavior in this report.
 
 ### Progress communication
 
@@ -242,11 +244,49 @@ version, OEM, device settings, and the exact application build.
 | Progress notification | Passed | Passed while worker remained active |
 | Completion notification | Passed | Passed |
 | Notification tap | Opened the app | Opened the app |
-| Failure handling | Failure notification implemented | Recorded test reported silent failure |
+| Failure handling | Failure notification; no automatic restart when internet returned | Failure notification; no automatic restart observed when internet returned |
 
-The latest WorkManager code includes failure notifications and retry handling,
-which differs from the recorded test result. The exact final WorkManager APK
-should be tested again before its behavior is presented as verified.
+## Failure handling
+
+The failure test was performed by disconnecting the internet while a download
+was active. Both APKs showed the same visible behavior:
+
+1. Dio reported a network error and the active download stopped.
+2. The progress notification changed to a failure notification.
+3. If the application screen was open, the UI also showed an error snackbar.
+4. If the application was closed, only the notification could be shown because
+   there was no active Flutter screen on which to display a snackbar.
+5. Restoring the internet connection did not continue the existing download.
+6. Starting the download again began at 0%.
+
+The download is **stopped**, not paused. Neither implementation stores the
+partially downloaded byte position or sends an HTTP range request, so it cannot
+continue from the previous percentage.
+
+### Foreground Service behavior
+
+When Dio throws a network error, the background isolate:
+
+- Clears the saved pending job.
+- Sends a failure event to the UI when the UI is available.
+- Shows a failure notification.
+- Stops the Foreground Service.
+
+The current Foreground Service implementation does not schedule an automatic
+network retry. The user must start a new download after connectivity returns.
+
+### WorkManager behavior
+
+When Dio throws a network error, the worker:
+
+- Writes a failed progress snapshot for the UI.
+- Shows a failure notification.
+- Requests a delayed retry for errors classified as temporary.
+
+WorkManager decides when a requested retry may run; it is not guaranteed to
+restart immediately when the internet returns. In the tested APK and device, no
+automatic restart was observed. Therefore, the verified result is the same as
+the Foreground Service: the user starts another download, and it begins at 0%.
 
 ## Meaning of “app closed”
 
