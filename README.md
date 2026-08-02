@@ -225,8 +225,6 @@ may still display generic downloading text before the worker starts.
 | User-visible long work | Designed for it | Scheduler controlled |
 | Ongoing notification | Required | Optional ordinary notification |
 | Live progress to UI | Plugin event channel | File polling in this spike |
-| Constraints and backoff | Custom | Built in |
-| Process/reboot durability | Custom recovery; boot restart disabled | Built in |
 | Best use case | Active downloads, tracking, media | Sync, cleanup, periodic work |
 
 ## Physical-device test results
